@@ -1,6 +1,5 @@
 const express = require("express");
 const { createClient } = require("@supabase/supabase-js");
-
 const env = require("../config/env");
 const { supabaseAdmin } = require("../services/supabase");
 
@@ -23,49 +22,64 @@ function createAuthClient() {
 |--------------------------------------------------------------------------
 | SIGN UP
 |--------------------------------------------------------------------------
-| Creates the account, confirms it, then signs the user in immediately.
-|--------------------------------------------------------------------------
 */
 
 router.post("/signup", async (req, res) => {
   try {
-    const {
-      email,
-      password,
-      name
-    } = req.body;
+    const { email, password, name } = req.body;
 
-    const cleanEmail =
-      String(email || "")
-        .trim()
-        .toLowerCase();
+    const cleanEmail = String(email || "")
+      .trim()
+      .toLowerCase();
 
-    const cleanName =
-      String(name || "").trim();
+    const cleanName = String(name || "").trim();
 
     if (!cleanEmail || !password) {
       return res.status(400).json({
-        error:
-          "Email and password are required."
+        error: "Email and password are required."
       });
     }
 
     if (password.length < 8) {
       return res.status(400).json({
-        error:
-          "Password must be at least 8 characters."
+        error: "Password must be at least 8 characters."
       });
     }
 
     /*
-     * Create the user with the server-side
-     * Supabase service-role client.
-     *
-     * email_confirm: true means the newly
-     * created account is immediately confirmed.
+     * Check whether the account already exists.
+     */
+    const { data: existingUsers, error: listError } =
+      await supabaseAdmin.auth.admin.listUsers({
+        page: 1,
+        perPage: 1000
+      });
+
+    if (listError) {
+      console.error("User lookup error:", listError);
+
+      return res.status(500).json({
+        error: "Unable to check account."
+      });
+    }
+
+    const existingUser = existingUsers.users.find(
+      (user) =>
+        user.email?.toLowerCase() === cleanEmail
+    );
+
+    if (existingUser) {
+      return res.status(409).json({
+        error: "An account with this email already exists. Please log in."
+      });
+    }
+
+    /*
+     * Create the user with email already confirmed.
+     * This allows immediate login after registration.
      */
     const {
-      data: created,
+      data: createdUser,
       error: createError
     } = await supabaseAdmin.auth.admin.createUser({
       email: cleanEmail,
@@ -77,66 +91,52 @@ router.post("/signup", async (req, res) => {
     });
 
     if (createError) {
-      console.error(
-        "Signup create user error:",
-        createError
-      );
+      console.error("Signup error:", createError);
 
       return res.status(400).json({
         error: createError.message
       });
     }
 
-    if (!created?.user) {
-      return res.status(500).json({
-        error:
-          "Account was created but user information was not returned."
-      });
-    }
-
     /*
-     * Now sign the new user in so Supabase
-     * gives us a real access token.
+     * Sign the new user in immediately.
      */
     const supabase = createAuthClient();
 
     const {
       data: loginData,
       error: loginError
-    } =
-      await supabase.auth.signInWithPassword({
-        email: cleanEmail,
-        password
-      });
+    } = await supabase.auth.signInWithPassword({
+      email: cleanEmail,
+      password
+    });
 
-    if (loginError || !loginData?.session) {
+    if (loginError) {
       console.error(
-        "Signup automatic login error:",
+        "Automatic login error:",
         loginError
       );
 
-      return res.status(500).json({
-        error:
-          "Account created, but automatic login failed. Please log in."
+      return res.status(201).json({
+        message:
+          "Account created successfully. Please log in.",
+        user: createdUser.user,
+        session: null
       });
     }
 
     return res.status(201).json({
       message:
-        "Account created successfully.",
+        "Account created and logged in successfully.",
       user: loginData.user,
       session: loginData.session
     });
 
   } catch (error) {
-    console.error(
-      "Signup error:",
-      error
-    );
+    console.error("Signup error:", error);
 
     return res.status(500).json({
-      error:
-        "Unable to create account."
+      error: "Unable to create account."
     });
   }
 });
@@ -149,20 +149,15 @@ router.post("/signup", async (req, res) => {
 
 router.post("/login", async (req, res) => {
   try {
-    const {
-      email,
-      password
-    } = req.body;
+    const { email, password } = req.body;
 
-    const cleanEmail =
-      String(email || "")
-        .trim()
-        .toLowerCase();
+    const cleanEmail = String(email || "")
+      .trim()
+      .toLowerCase();
 
     if (!cleanEmail || !password) {
       return res.status(400).json({
-        error:
-          "Email and password are required."
+        error: "Email and password are required."
       });
     }
 
@@ -171,35 +166,28 @@ router.post("/login", async (req, res) => {
     const {
       data,
       error
-    } =
-      await supabase.auth.signInWithPassword({
-        email: cleanEmail,
-        password
-      });
+    } = await supabase.auth.signInWithPassword({
+      email: cleanEmail,
+      password
+    });
 
-    if (error || !data?.session) {
+    if (error) {
       return res.status(401).json({
-        error:
-          "Invalid email or password."
+        error: "Invalid email or password."
       });
     }
 
     return res.json({
-      message:
-        "Login successful.",
+      message: "Login successful.",
       user: data.user,
       session: data.session
     });
 
   } catch (error) {
-    console.error(
-      "Login error:",
-      error
-    );
+    console.error("Login error:", error);
 
     return res.status(500).json({
-      error:
-        "Unable to login."
+      error: "Unable to login."
     });
   }
 });
@@ -213,40 +201,38 @@ router.post("/login", async (req, res) => {
 router.post("/logout", async (req, res) => {
   try {
     const authorization =
-      req.headers.authorization;
+      req.headers.authorization || "";
 
-    if (!authorization) {
+    if (!authorization.startsWith("Bearer ")) {
       return res.json({
-        message:
-          "Logged out."
+        message: "Logged out."
       });
     }
 
     const token =
-      authorization
-        .replace(/^Bearer\s+/i, "")
-        .trim();
+      authorization.replace("Bearer ", "").trim();
 
-    if (token) {
-      await supabaseAdmin.auth.getUser(
-        token
+    const {
+      data: { user },
+      error
+    } = await supabaseAdmin.auth.getUser(token);
+
+    if (!error && user) {
+      await supabaseAdmin.auth.admin.signOut(
+        user.id,
+        "global"
       );
     }
 
     return res.json({
-      message:
-        "Logout successful."
+      message: "Logout successful."
     });
 
   } catch (error) {
-    console.error(
-      "Logout error:",
-      error
-    );
+    console.error("Logout error:", error);
 
     return res.json({
-      message:
-        "Logout successful."
+      message: "Logout successful."
     });
   }
 });
@@ -260,39 +246,25 @@ router.post("/logout", async (req, res) => {
 router.get("/me", async (req, res) => {
   try {
     const authorization =
-      req.headers.authorization;
+      req.headers.authorization || "";
 
-    if (!authorization) {
+    if (!authorization.startsWith("Bearer ")) {
       return res.status(401).json({
-        error:
-          "Authentication required."
+        error: "Authentication required."
       });
     }
 
     const token =
-      authorization
-        .replace(/^Bearer\s+/i, "")
-        .trim();
-
-    if (!token) {
-      return res.status(401).json({
-        error:
-          "Authentication required."
-      });
-    }
+      authorization.replace("Bearer ", "").trim();
 
     const {
       data: { user },
       error
-    } =
-      await supabaseAdmin.auth.getUser(
-        token
-      );
+    } = await supabaseAdmin.auth.getUser(token);
 
     if (error || !user) {
       return res.status(401).json({
-        error:
-          "Invalid session."
+        error: "Invalid session."
       });
     }
 
@@ -301,14 +273,10 @@ router.get("/me", async (req, res) => {
     });
 
   } catch (error) {
-    console.error(
-      "Current user error:",
-      error
-    );
+    console.error("Auth check error:", error);
 
     return res.status(401).json({
-      error:
-        "Invalid session."
+      error: "Invalid session."
     });
   }
 });
