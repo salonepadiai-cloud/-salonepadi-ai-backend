@@ -1,18 +1,5 @@
 require("dotenv").config();
 
-const required = [
-  "SUPABASE_URL",
-  "SUPABASE_ANON_KEY",
-  "SUPABASE_SERVICE_ROLE_KEY",
-  "OPENAI_API_KEY"
-];
-
-for (const key of required) {
-  if (!process.env[key]) {
-    console.warn(`Warning: ${key} is not configured.`);
-  }
-}
-
 module.exports = {
   port: Number(process.env.PORT) || 3000,
 
@@ -25,5 +12,5 @@ module.exports = {
 
   frontendUrl:
     process.env.FRONTEND_URL ||
-    "https://salonepadi-ai-cloud.github.io"
+    "https://salonepadiai-cloud.github.io"
 };
