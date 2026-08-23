@@ -4,33 +4,62 @@ async function authenticate(req, res, next) {
   try {
     const authorization = req.headers.authorization;
 
-    if (!authorization || !authorization.startsWith("Bearer ")) {
+    if (!authorization) {
       return res.status(401).json({
         error: "Authentication required."
       });
     }
 
-    const token = authorization.replace("Bearer ", "").trim();
+    if (!authorization.startsWith("Bearer ")) {
+      return res.status(401).json({
+        error: "Invalid authorization format."
+      });
+    }
+
+    const token = authorization
+      .slice(7)
+      .trim();
+
+    if (!token) {
+      return res.status(401).json({
+        error: "Access token is missing."
+      });
+    }
 
     const {
-      data: { user },
+      data,
       error
     } = await supabaseAdmin.auth.getUser(token);
 
-    if (error || !user) {
+    if (error) {
+      console.error(
+        "Supabase token verification failed:",
+        error.message
+      );
+
       return res.status(401).json({
         error: "Invalid or expired session."
       });
     }
 
-    req.user = user;
+    if (!data?.user) {
+      return res.status(401).json({
+        error: "User session not found."
+      });
+    }
+
+    req.user = data.user;
     req.accessToken = token;
 
     next();
-  } catch (error) {
-    console.error("Authentication error:", error);
 
-    res.status(401).json({
+  } catch (error) {
+    console.error(
+      "Authentication middleware error:",
+      error
+    );
+
+    return res.status(401).json({
       error: "Authentication failed."
     });
   }
