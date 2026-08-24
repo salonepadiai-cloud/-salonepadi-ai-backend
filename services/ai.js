@@ -11,6 +11,43 @@ const client = env.groqApiKey
     })
   : null;
 
+/*
+|--------------------------------------------------------------------------
+| Clean AI response
+|--------------------------------------------------------------------------
+|
+| Removes invisible/control characters and normalizes
+| unusual Unicode characters while keeping normal
+| punctuation, emojis, and line breaks.
+|
+*/
+
+function cleanAIResponse(text) {
+  if (!text) {
+    return "";
+  }
+
+  return String(text)
+    // Remove null bytes and invisible control characters
+    .replace(/\u0000/g, "")
+    .replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
+
+    // Normalize different Unicode representations
+    .normalize("NFC")
+
+    // Normalize Windows/Mac line endings
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+
+    // Remove excessive blank lines
+    .replace(/\n{4,}/g, "\n\n\n")
+
+    // Remove excessive spaces
+    .replace(/[ \t]{3,}/g, " ")
+
+    .trim();
+}
+
 async function generateAIResponse({
   userId,
   message,
@@ -56,12 +93,12 @@ No stored memories are currently available.
           item.role === "assistant"
             ? "assistant"
             : "user",
-        content: item.content
+        content: String(item.content || "")
       })),
 
     {
       role: "user",
-      content: message
+      content: String(message || "")
     }
   ];
 
@@ -72,10 +109,10 @@ No stored memories are currently available.
       temperature: 0.7
     });
 
-  return (
-    response.choices?.[0]?.message?.content ||
-    ""
-  );
+  const rawResponse =
+    response.choices?.[0]?.message?.content || "";
+
+  return cleanAIResponse(rawResponse);
 }
 
 module.exports = {
