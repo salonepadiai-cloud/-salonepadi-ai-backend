@@ -1,11 +1,13 @@
 const OpenAI = require("openai");
+
 const env = require("../config/env");
 const { SYSTEM_PROMPT } = require("../utils/prompts");
 const { getUserMemories } = require("./memory");
 
-const client = env.openaiApiKey
+const client = env.groqApiKey
   ? new OpenAI({
-      apiKey: env.openaiApiKey
+      apiKey: env.groqApiKey,
+      baseURL: "https://api.groq.com/openai/v1"
     })
   : null;
 
@@ -15,10 +17,13 @@ async function generateAIResponse({
   conversationHistory = []
 }) {
   if (!client) {
-    throw new Error("AI service is not configured.");
+    throw new Error(
+      "Groq AI service is not configured."
+    );
   }
 
-  const memories = await getUserMemories(userId);
+  const memories =
+    await getUserMemories(userId);
 
   const memoryContext =
     memories.length > 0
@@ -38,27 +43,39 @@ No stored memories are currently available.
       role: "system",
       content: SYSTEM_PROMPT
     },
+
     {
       role: "system",
       content: memoryContext
     },
-    ...conversationHistory.slice(-20).map((item) => ({
-      role: item.role === "assistant" ? "assistant" : "user",
-      content: item.content
-    })),
+
+    ...conversationHistory
+      .slice(-20)
+      .map((item) => ({
+        role:
+          item.role === "assistant"
+            ? "assistant"
+            : "user",
+        content: item.content
+      })),
+
     {
       role: "user",
       content: message
     }
   ];
 
-  const response = await client.chat.completions.create({
-    model: env.openaiModel,
-    messages,
-    temperature: 0.7
-  });
+  const response =
+    await client.chat.completions.create({
+      model: env.groqModel,
+      messages,
+      temperature: 0.7
+    });
 
-  return response.choices?.[0]?.message?.content || "";
+  return (
+    response.choices?.[0]?.message?.content ||
+    ""
+  );
 }
 
 module.exports = {
