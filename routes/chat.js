@@ -1,4 +1,5 @@
 const express = require("express");
+
 const authenticate = require("../middleware/auth");
 const { supabaseAdmin } = require("../services/supabase");
 const { generateAIResponse } = require("../services/ai");
@@ -7,183 +8,633 @@ const router = express.Router();
 
 router.use(authenticate);
 
-router.get("/conversations", async (req, res) => {
-  try {
-    const { data, error } = await supabaseAdmin
-      .from("conversations")
-      .select("id, title, created_at, updated_at")
-      .eq("user_id", req.user.id)
-      .order("updated_at", { ascending: false });
 
-    if (error) {
-      throw error;
-    }
+/*
+|--------------------------------------------------------------------------
+| CONSTANTS
+|--------------------------------------------------------------------------
+*/
 
-    res.json({
-      conversations: data || []
-    });
-  } catch (error) {
-    console.error(error);
+const MAX_MESSAGE_LENGTH = 20000;
+const MAX_HISTORY = 30;
 
-    res.status(500).json({
-      error: "Unable to load conversations."
-    });
+
+/*
+|--------------------------------------------------------------------------
+| HELPERS
+|--------------------------------------------------------------------------
+*/
+
+function cleanText(value) {
+  if (value === undefined || value === null) {
+    return "";
   }
-});
 
-router.post("/conversations", async (req, res) => {
-  try {
-    const { title = "New Chat" } = req.body;
+  return String(value)
+    .replace(/\u0000/g, "")
+    .replace(
+      /[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F]/g,
+      ""
+    )
+    .normalize("NFC")
+    .trim();
+}
 
-    const { data, error } = await supabaseAdmin
-      .from("conversations")
-      .insert({
-        user_id: req.user.id,
-        title
-      })
-      .select()
-      .single();
 
-    if (error) {
-      throw error;
-    }
+function isValidConversationId(id) {
+  return (
+    typeof id === "string" &&
+    id.trim().length > 0
+  );
+}
 
-    res.status(201).json({
-      conversation: data
-    });
-  } catch (error) {
-    console.error(error);
 
-    res.status(500).json({
-      error: "Unable to create conversation."
-    });
-  }
-});
+/*
+|--------------------------------------------------------------------------
+| GET CONVERSATIONS
+|--------------------------------------------------------------------------
+|
+| Returns only conversations belonging to the authenticated user.
+|
+*/
 
-router.get("/conversations/:id/messages", async (req, res) => {
-  try {
-    const conversationId = req.params.id;
+router.get(
+  "/conversations",
+  async (req, res) => {
+    try {
+      const { data, error } =
+        await supabaseAdmin
+          .from("conversations")
+          .select(
+            "id, title, created_at, updated_at"
+          )
+          .eq(
+            "user_id",
+            req.user.id
+          )
+          .order(
+            "updated_at",
+            {
+              ascending: false
+            }
+          );
 
-    const { data: conversation } = await supabaseAdmin
-      .from("conversations")
-      .select("id")
-      .eq("id", conversationId)
-      .eq("user_id", req.user.id)
-      .single();
+      if (error) {
+        throw error;
+      }
 
-    if (!conversation) {
-      return res.status(404).json({
-        error: "Conversation not found."
+      return res.json({
+        conversations: data || []
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Load conversations error:",
+        error
+      );
+
+      return res.status(500).json({
+        error:
+          "Unable to load conversations."
       });
     }
-
-    const { data, error } = await supabaseAdmin
-      .from("messages")
-      .select("id, role, content, created_at")
-      .eq("conversation_id", conversationId)
-      .order("created_at", { ascending: true });
-
-    if (error) {
-      throw error;
-    }
-
-    res.json({
-      messages: data || []
-    });
-  } catch (error) {
-    console.error(error);
-
-    res.status(500).json({
-      error: "Unable to load messages."
-    });
   }
-});
+);
 
-router.post("/conversations/:id/messages", async (req, res) => {
-  try {
-    const conversationId = req.params.id;
-    const { message } = req.body;
 
-    if (!message || !message.trim()) {
-      return res.status(400).json({
-        error: "Message is required."
+/*
+|--------------------------------------------------------------------------
+| CREATE CONVERSATION
+|--------------------------------------------------------------------------
+*/
+
+router.post(
+  "/conversations",
+  async (req, res) => {
+    try {
+
+      const requestedTitle =
+        cleanText(
+          req.body?.title
+        );
+
+      const title =
+        requestedTitle ||
+        "New Chat";
+
+      const { data, error } =
+        await supabaseAdmin
+          .from("conversations")
+          .insert({
+            user_id: req.user.id,
+            title: title.slice(0, 120)
+          })
+          .select()
+          .single();
+
+      if (error) {
+        throw error;
+      }
+
+      return res.status(201).json({
+        conversation: data
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Create conversation error:",
+        error
+      );
+
+      return res.status(500).json({
+        error:
+          "Unable to create conversation."
       });
     }
+  }
+);
 
-    const { data: conversation } = await supabaseAdmin
-      .from("conversations")
-      .select("id")
-      .eq("id", conversationId)
-      .eq("user_id", req.user.id)
-      .single();
 
-    if (!conversation) {
-      return res.status(404).json({
-        error: "Conversation not found."
-      });
-    }
+/*
+|--------------------------------------------------------------------------
+| GET CONVERSATION MESSAGES
+|--------------------------------------------------------------------------
+*/
 
-    const { data: previousMessages, error: historyError } =
-      await supabaseAdmin
+router.get(
+  "/conversations/:id/messages",
+  async (req, res) => {
+
+    try {
+
+      const conversationId =
+        cleanText(
+          req.params.id
+        );
+
+      if (
+        !isValidConversationId(
+          conversationId
+        )
+      ) {
+        return res.status(400).json({
+          error:
+            "Conversation ID is required."
+        });
+      }
+
+
+      /*
+       * Verify ownership.
+       */
+
+      const {
+        data: conversation,
+        error: conversationError
+      } = await supabaseAdmin
+        .from("conversations")
+        .select("id")
+        .eq(
+          "id",
+          conversationId
+        )
+        .eq(
+          "user_id",
+          req.user.id
+        )
+        .single();
+
+
+      if (
+        conversationError ||
+        !conversation
+      ) {
+        return res.status(404).json({
+          error:
+            "Conversation not found."
+        });
+      }
+
+
+      /*
+       * Load messages.
+       */
+
+      const {
+        data,
+        error
+      } = await supabaseAdmin
         .from("messages")
-        .select("role, content")
-        .eq("conversation_id", conversationId)
-        .order("created_at", { ascending: true })
-        .limit(30);
+        .select(
+          "id, role, content, created_at"
+        )
+        .eq(
+          "conversation_id",
+          conversationId
+        )
+        .eq(
+          "user_id",
+          req.user.id
+        )
+        .order(
+          "created_at",
+          {
+            ascending: true
+          }
+        );
 
-    if (historyError) {
-      throw historyError;
-    }
 
-    await supabaseAdmin
-      .from("messages")
-      .insert({
-        conversation_id: conversationId,
-        user_id: req.user.id,
-        role: "user",
-        content: message.trim()
+      if (error) {
+        throw error;
+      }
+
+
+      return res.json({
+        messages: data || []
       });
 
-    const aiResponse = await generateAIResponse({
-      userId: req.user.id,
-      message: message.trim(),
-      conversationHistory: previousMessages || []
-    });
+    } catch (error) {
 
-    const { data: savedAssistantMessage, error: assistantError } =
-      await supabaseAdmin
+      console.error(
+        "Load messages error:",
+        error
+      );
+
+      return res.status(500).json({
+        error:
+          "Unable to load messages."
+      });
+    }
+  }
+);
+
+
+/*
+|--------------------------------------------------------------------------
+| SEND MESSAGE
+|--------------------------------------------------------------------------
+|
+| Flow:
+|
+| User
+|   ↓
+| Verify conversation
+|   ↓
+| Load history
+|   ↓
+| Save user message
+|   ↓
+| Generate AI response
+|   ↓
+| Save AI response
+|   ↓
+| Update conversation
+|   ↓
+| Return AI response
+|
+*/
+
+router.post(
+  "/conversations/:id/messages",
+  async (req, res) => {
+
+    try {
+
+      const conversationId =
+        cleanText(
+          req.params.id
+        );
+
+      const message =
+        cleanText(
+          req.body?.message
+        );
+
+
+      /*
+       * Validate conversation ID.
+       */
+
+      if (
+        !isValidConversationId(
+          conversationId
+        )
+      ) {
+        return res.status(400).json({
+          error:
+            "Conversation ID is required."
+        });
+      }
+
+
+      /*
+       * Validate message.
+       */
+
+      if (!message) {
+        return res.status(400).json({
+          error:
+            "Message is required."
+        });
+      }
+
+
+      if (
+        message.length >
+        MAX_MESSAGE_LENGTH
+      ) {
+        return res.status(400).json({
+          error:
+            `Message is too long. Maximum length is ${MAX_MESSAGE_LENGTH} characters.`
+        });
+      }
+
+
+      /*
+       * Verify conversation ownership.
+       */
+
+      const {
+        data: conversation,
+        error: conversationError
+      } = await supabaseAdmin
+        .from("conversations")
+        .select(
+          "id, title"
+        )
+        .eq(
+          "id",
+          conversationId
+        )
+        .eq(
+          "user_id",
+          req.user.id
+        )
+        .single();
+
+
+      if (
+        conversationError ||
+        !conversation
+      ) {
+        return res.status(404).json({
+          error:
+            "Conversation not found."
+        });
+      }
+
+
+      /*
+       * Load previous conversation history.
+       */
+
+      const {
+        data: previousMessages,
+        error: historyError
+      } = await supabaseAdmin
+        .from("messages")
+        .select(
+          "role, content"
+        )
+        .eq(
+          "conversation_id",
+          conversationId
+        )
+        .eq(
+          "user_id",
+          req.user.id
+        )
+        .order(
+          "created_at",
+          {
+            ascending: true
+          }
+        )
+        .limit(
+          MAX_HISTORY
+        );
+
+
+      if (historyError) {
+        throw historyError;
+      }
+
+
+      /*
+       * Save user message.
+       */
+
+      const {
+        data: savedUserMessage,
+        error: userMessageError
+      } = await supabaseAdmin
         .from("messages")
         .insert({
-          conversation_id: conversationId,
-          user_id: req.user.id,
-          role: "assistant",
-          content: aiResponse
+          conversation_id:
+            conversationId,
+
+          user_id:
+            req.user.id,
+
+          role:
+            "user",
+
+          content:
+            message
         })
         .select()
         .single();
 
-    if (assistantError) {
-      throw assistantError;
+
+      if (userMessageError) {
+        throw userMessageError;
+      }
+
+
+      /*
+       * Generate AI response.
+       *
+       * The AI service also handles:
+       *
+       * - Existing memory
+       * - Memory context
+       * - Automatic memory extraction
+       * - Groq generation
+       */
+
+      let aiResponse;
+
+      try {
+
+        aiResponse =
+          await generateAIResponse({
+            userId:
+              req.user.id,
+
+            message:
+              message,
+
+            conversationHistory:
+              previousMessages || []
+          });
+
+      } catch (aiError) {
+
+        console.error(
+          "AI generation error:",
+          aiError
+        );
+
+
+        /*
+         * The user's message has already been saved.
+         *
+         * We return an AI-specific error instead of pretending
+         * that the message was never received.
+         */
+
+        return res.status(502).json({
+          error:
+            aiError.message ||
+            "Unable to generate AI response."
+        });
+      }
+
+
+      /*
+       * Make sure the AI actually returned something.
+       */
+
+      const cleanAIResponse =
+        cleanText(
+          aiResponse
+        );
+
+
+      if (!cleanAIResponse) {
+
+        console.error(
+          "AI returned an empty response."
+        );
+
+        return res.status(502).json({
+          error:
+            "The AI returned an empty response."
+        });
+      }
+
+
+      /*
+       * Save assistant message.
+       */
+
+      const {
+        data: savedAssistantMessage,
+        error: assistantError
+      } = await supabaseAdmin
+        .from("messages")
+        .insert({
+          conversation_id:
+            conversationId,
+
+          user_id:
+            req.user.id,
+
+          role:
+            "assistant",
+
+          content:
+            cleanAIResponse
+        })
+        .select()
+        .single();
+
+
+      if (assistantError) {
+        throw assistantError;
+      }
+
+
+      /*
+       * Update conversation timestamp.
+       */
+
+      const {
+        error: conversationUpdateError
+      } = await supabaseAdmin
+        .from("conversations")
+        .update({
+          updated_at:
+            new Date().toISOString()
+        })
+        .eq(
+          "id",
+          conversationId
+        )
+        .eq(
+          "user_id",
+          req.user.id
+        );
+
+
+      if (
+        conversationUpdateError
+      ) {
+        console.error(
+          "Conversation update error:",
+          conversationUpdateError
+        );
+
+        /*
+         * Do not fail the entire chat because the timestamp
+         * update failed after the AI response was already saved.
+         */
+      }
+
+
+      /*
+       * Return both messages.
+       */
+
+      return res.json({
+        userMessage:
+          savedUserMessage,
+
+        message:
+          savedAssistantMessage,
+
+        conversation: {
+          id:
+            conversationId,
+
+          title:
+            conversation?.title ||
+            "New Chat"
+        }
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Chat route error:",
+        error
+      );
+
+      return res.status(500).json({
+        error:
+          "Unable to process your message."
+      });
     }
-
-    await supabaseAdmin
-      .from("conversations")
-      .update({
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", conversationId)
-      .eq("user_id", req.user.id);
-
-    res.json({
-      message: savedAssistantMessage
-    });
-  } catch (error) {
-    console.error("Chat error:", error);
-
-    res.status(500).json({
-      error: "Unable to generate AI response."
-    });
   }
-});
+);
+
+
+/*
+|--------------------------------------------------------------------------
+| EXPORT ROUTER
+|--------------------------------------------------------------------------
+*/
 
 module.exports = router;
