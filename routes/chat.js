@@ -159,6 +159,258 @@ router.post(
 
 /*
 |--------------------------------------------------------------------------
+| RENAME CONVERSATION
+|--------------------------------------------------------------------------
+|
+| Lets the user set their own title instead of living with
+| whatever was auto-generated when the conversation was created.
+|
+*/
+
+router.patch(
+  "/conversations/:id",
+  async (req, res) => {
+
+    try {
+
+      const conversationId =
+        cleanText(
+          req.params.id
+        );
+
+      const requestedTitle =
+        cleanText(
+          req.body?.title
+        );
+
+      if (
+        !isValidConversationId(
+          conversationId
+        )
+      ) {
+        return res.status(400).json({
+          error:
+            "Conversation ID is required."
+        });
+      }
+
+      if (!requestedTitle) {
+        return res.status(400).json({
+          error:
+            "Title is required."
+        });
+      }
+
+
+      /*
+       * Verify ownership before updating anything.
+       */
+
+      const {
+        data: conversation,
+        error: conversationError
+      } = await supabaseAdmin
+        .from("conversations")
+        .select("id")
+        .eq(
+          "id",
+          conversationId
+        )
+        .eq(
+          "user_id",
+          req.user.id
+        )
+        .single();
+
+
+      if (
+        conversationError ||
+        !conversation
+      ) {
+        return res.status(404).json({
+          error:
+            "Conversation not found."
+        });
+      }
+
+
+      const {
+        data: updatedConversation,
+        error: updateError
+      } = await supabaseAdmin
+        .from("conversations")
+        .update({
+          title:
+            requestedTitle.slice(0, 120)
+        })
+        .eq(
+          "id",
+          conversationId
+        )
+        .eq(
+          "user_id",
+          req.user.id
+        )
+        .select()
+        .single();
+
+
+      if (updateError) {
+        throw updateError;
+      }
+
+
+      return res.json({
+        conversation: updatedConversation
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Rename conversation error:",
+        error
+      );
+
+      return res.status(500).json({
+        error:
+          "Unable to rename conversation."
+      });
+    }
+  }
+);
+
+
+/*
+|--------------------------------------------------------------------------
+| DELETE CONVERSATION
+|--------------------------------------------------------------------------
+|
+| Deletes a conversation and all of its messages.
+| Ownership is verified before anything is deleted.
+|
+*/
+
+router.delete(
+  "/conversations/:id",
+  async (req, res) => {
+
+    try {
+
+      const conversationId =
+        cleanText(
+          req.params.id
+        );
+
+      if (
+        !isValidConversationId(
+          conversationId
+        )
+      ) {
+        return res.status(400).json({
+          error:
+            "Conversation ID is required."
+        });
+      }
+
+
+      /*
+       * Verify ownership before deleting anything.
+       */
+
+      const {
+        data: conversation,
+        error: conversationError
+      } = await supabaseAdmin
+        .from("conversations")
+        .select("id")
+        .eq(
+          "id",
+          conversationId
+        )
+        .eq(
+          "user_id",
+          req.user.id
+        )
+        .single();
+
+
+      if (
+        conversationError ||
+        !conversation
+      ) {
+        return res.status(404).json({
+          error:
+            "Conversation not found."
+        });
+      }
+
+
+      /*
+       * Delete messages first, then the conversation itself.
+       * Done explicitly rather than relying on a DB cascade,
+       * since we can't assume one is configured.
+       */
+
+      const {
+        error: messagesDeleteError
+      } = await supabaseAdmin
+        .from("messages")
+        .delete()
+        .eq(
+          "conversation_id",
+          conversationId
+        )
+        .eq(
+          "user_id",
+          req.user.id
+        );
+
+      if (messagesDeleteError) {
+        throw messagesDeleteError;
+      }
+
+      const {
+        error: conversationDeleteError
+      } = await supabaseAdmin
+        .from("conversations")
+        .delete()
+        .eq(
+          "id",
+          conversationId
+        )
+        .eq(
+          "user_id",
+          req.user.id
+        );
+
+      if (conversationDeleteError) {
+        throw conversationDeleteError;
+      }
+
+
+      return res.json({
+        message:
+          "Conversation deleted."
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Delete conversation error:",
+        error
+      );
+
+      return res.status(500).json({
+        error:
+          "Unable to delete conversation."
+      });
+    }
+  }
+);
+
+
+/*
+|--------------------------------------------------------------------------
 | GET CONVERSATION MESSAGES
 |--------------------------------------------------------------------------
 */
