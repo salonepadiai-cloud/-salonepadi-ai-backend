@@ -179,8 +179,9 @@ const PROVIDERS = {
 | 6. Save useful memories.
 |
 | The `provider` param is optional. If omitted, or if it names a
-| provider that isn't configured, the server's default (env.defaultAiProvider)
-| is used instead — this is decided here, not silently in the route.
+| provider that isn't configured, the server's default
+| (env.defaultAiProvider) is used instead — this is decided here,
+| not silently in the route.
 |
 */
 
