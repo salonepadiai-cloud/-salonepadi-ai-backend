@@ -14,6 +14,18 @@ module.exports = {
     process.env.GROQ_MODEL ||
     "openai/gpt-oss-120b",
 
+  geminiApiKey: process.env.GEMINI_API_KEY,
+
+  geminiModel:
+    process.env.GEMINI_MODEL ||
+    "gemini-1.5-flash",
+
+  // Which brain answers by default when the frontend doesn't
+  // specify one. Existing behavior is unchanged unless this
+  // env var is set.
+  defaultAiProvider:
+    process.env.AI_PROVIDER || "groq",
+
   frontendUrl:
     process.env.FRONTEND_URL ||
     "https://salonepadiai-cloud.github.io"
