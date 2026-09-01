@@ -716,11 +716,11 @@ router.post(
        * - Provider selection (Groq or Gemini)
        */
 
-      let aiResponse;
+      let aiResult;
 
       try {
 
-        aiResponse =
+        aiResult =
           await generateAIResponse({
             userId:
               req.user.id,
@@ -764,8 +764,11 @@ router.post(
 
       const cleanAIResponse =
         cleanText(
-          aiResponse
+          aiResult.text
         );
+
+      const usedProvider =
+        aiResult.provider;
 
 
       if (!cleanAIResponse) {
@@ -857,8 +860,10 @@ router.post(
         userMessage:
           savedUserMessage,
 
-        message:
-          savedAssistantMessage,
+        message: {
+          ...savedAssistantMessage,
+          provider: usedProvider
+        },
 
         conversation: {
           id:
@@ -893,4 +898,3 @@ router.post(
 */
 
 module.exports = router;
-        
