@@ -381,9 +381,19 @@ No stored memories are currently available.
   |--------------------------------------------------------------------------
   | RETURN RESPONSE
   |--------------------------------------------------------------------------
+  |
+  | Returns both the text and which provider actually generated it.
+  | The caller (and ultimately the frontend) should display THIS
+  | value rather than assuming the requested provider was used —
+  | that assumption is exactly what silently breaks if this code
+  | isn't deployed yet, or if provider selection logic changes later.
+  |
   */
 
-  return cleanedResponse;
+  return {
+    text: cleanedResponse,
+    provider: requestedProvider
+  };
 }
 
 
