@@ -1,4 +1,5 @@
 const OpenAI = require("openai");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const env = require("../config/env");
 const { SYSTEM_PROMPT } = require("../utils/prompts");
@@ -11,15 +12,24 @@ const {
 
 /*
 |--------------------------------------------------------------------------
-| GROQ CLIENT
+| AI CLIENTS
 |--------------------------------------------------------------------------
+|
+| Both providers are optional. Whichever API key is present becomes
+| available; the other is simply skipped. This lets Groq keep working
+| exactly as before even if Gemini is never configured.
+|
 */
 
-const client = env.groqApiKey
+const groqClient = env.groqApiKey
   ? new OpenAI({
       apiKey: env.groqApiKey,
       baseURL: "https://api.groq.com/openai/v1"
     })
+  : null;
+
+const geminiClient = env.geminiApiKey
+  ? new GoogleGenerativeAI(env.geminiApiKey)
   : null;
 
 
@@ -55,6 +65,105 @@ function cleanAIResponse(text) {
 
 /*
 |--------------------------------------------------------------------------
+| PROVIDER: GROQ
+|--------------------------------------------------------------------------
+|
+| Unchanged from the original implementation — same client,
+| same model source, same call shape.
+|
+*/
+
+async function callGroq(messages) {
+  if (!groqClient) {
+    throw new Error(
+      "Groq AI service is not configured."
+    );
+  }
+
+  const response =
+    await groqClient.chat.completions.create({
+      model: env.groqModel,
+      messages,
+      temperature: 0.7
+    });
+
+  return (
+    response.choices?.[0]?.message?.content ||
+    ""
+  );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| PROVIDER: GEMINI
+|--------------------------------------------------------------------------
+|
+| Gemini's SDK uses a different message shape than OpenAI-style
+| chat completions (roles are "user"/"model", not "user"/"assistant",
+| and system prompts are passed separately as systemInstruction).
+| This function converts our shared internal format into that shape.
+|
+*/
+
+async function callGemini(messages) {
+  if (!geminiClient) {
+    throw new Error(
+      "Gemini AI service is not configured."
+    );
+  }
+
+  const systemText = messages
+    .filter((item) => item.role === "system")
+    .map((item) => item.content)
+    .join("\n\n");
+
+  const conversationMessages = messages.filter(
+    (item) => item.role !== "system"
+  );
+
+  const lastMessage =
+    conversationMessages.pop();
+
+  const model = geminiClient.getGenerativeModel({
+    model: env.geminiModel,
+    systemInstruction: systemText || undefined
+  });
+
+  const chat = model.startChat({
+    history: conversationMessages.map(
+      (item) => ({
+        role:
+          item.role === "assistant"
+            ? "model"
+            : "user",
+        parts: [{ text: item.content }]
+      })
+    )
+  });
+
+  const result = await chat.sendMessage(
+    lastMessage.content
+  );
+
+  return result.response.text();
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| PROVIDER REGISTRY
+|--------------------------------------------------------------------------
+*/
+
+const PROVIDERS = {
+  groq: callGroq,
+  gemini: callGemini
+};
+
+
+/*
+|--------------------------------------------------------------------------
 | GENERATE AI RESPONSE
 |--------------------------------------------------------------------------
 |
@@ -64,24 +173,23 @@ function cleanAIResponse(text) {
 |
 | 1. Retrieve existing user memories.
 | 2. Build the AI context.
-| 3. Send conversation to Groq.
+| 3. Send conversation to the selected provider (Groq or Gemini).
 | 4. Clean the response.
 | 5. Automatically look for new memories.
 | 6. Save useful memories.
+|
+| The `provider` param is optional. If omitted, or if it names a
+| provider that isn't configured, the server's default (env.defaultAiProvider)
+| is used instead — this is decided here, not silently in the route.
 |
 */
 
 async function generateAIResponse({
   userId,
   message,
-  conversationHistory = []
+  conversationHistory = [],
+  provider
 }) {
-  if (!client) {
-    throw new Error(
-      "Groq AI service is not configured."
-    );
-  }
-
   const cleanMessage =
     String(message || "").trim();
 
@@ -186,16 +294,37 @@ No stored memories are currently available.
 
   /*
   |--------------------------------------------------------------------------
-  | CALL GROQ
+  | SELECT PROVIDER
+  |--------------------------------------------------------------------------
+  |
+  | Falls back to the server default if no provider was requested,
+  | or if the requested one isn't a provider we know about.
+  |
+  */
+
+  const requestedProvider =
+    PROVIDERS[provider]
+      ? provider
+      : env.defaultAiProvider;
+
+  const callProvider =
+    PROVIDERS[requestedProvider];
+
+  if (!callProvider) {
+    throw new Error(
+      `Unknown AI provider: ${requestedProvider}`
+    );
+  }
+
+
+  /*
+  |--------------------------------------------------------------------------
+  | CALL PROVIDER
   |--------------------------------------------------------------------------
   */
 
-  const response =
-    await client.chat.completions.create({
-      model: env.groqModel,
-      messages,
-      temperature: 0.7
-    });
+  const rawResponse =
+    await callProvider(messages);
 
 
   /*
@@ -203,11 +332,6 @@ No stored memories are currently available.
   | EXTRACT RESPONSE
   |--------------------------------------------------------------------------
   */
-
-  const rawResponse =
-    response.choices?.[0]?.message?.content ||
-    "";
-
 
   const cleanedResponse =
     cleanAIResponse(
