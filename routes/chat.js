@@ -713,7 +713,7 @@ router.post(
        * - Existing memory
        * - Memory context
        * - Automatic memory extraction
-       * - Groq generation
+       * - Provider selection (Groq or Gemini)
        */
 
       let aiResponse;
@@ -729,7 +729,10 @@ router.post(
               message,
 
             conversationHistory:
-              previousMessages || []
+              previousMessages || [],
+
+            provider:
+              req.body?.provider
           });
 
       } catch (aiError) {
@@ -890,3 +893,4 @@ router.post(
 */
 
 module.exports = router;
+        
