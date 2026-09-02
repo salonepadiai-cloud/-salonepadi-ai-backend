@@ -1,11 +1,14 @@
 const express = require("express");
 const cors = require("cors");
+const http = require("http");
 const env = require("./config/env");
 
 const authRoutes = require("./routes/auth");
 const chatRoutes = require("./routes/chat");
 const memoryRoutes = require("./routes/memory");
 const userRoutes = require("./routes/user");
+
+const { attachLiveVoiceRelay } = require("./services/live-voice");
 
 const app = express();
 
@@ -80,7 +83,24 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || env.port || 3000;
 
-app.listen(PORT, () => {
+/*
+|--------------------------------------------------------------------------
+| HTTP + WEBSOCKET SERVER
+|--------------------------------------------------------------------------
+|
+| Express apps normally start with app.listen(). We wrap it in an
+| explicit http.Server instead so the Gemini Live voice relay can
+| attach a WebSocket server to the SAME underlying server — this is
+| the only structural change from the original file. Every existing
+| route above is untouched.
+|
+*/
+
+const server = http.createServer(app);
+
+attachLiveVoiceRelay(server);
+
+server.listen(PORT, () => {
   console.log(
     `SalonePadi AI backend running on port ${PORT}`
   );
