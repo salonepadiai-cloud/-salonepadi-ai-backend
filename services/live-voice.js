@@ -102,14 +102,62 @@ function attachLiveVoiceRelay(server) {
 
         geminiSocket.on(
           "close",
-          () => {
+          (code, reasonBuffer) => {
             geminiClosed = true;
+            const reason = reasonBuffer ? reasonBuffer.toString() : "";
+
             if (
               !clientClosed &&
               clientSocket.readyState === WebSocket.OPEN
             ) {
-              clientSocket.close();
+              /*
+               * Forward Gemini's real close code/reason instead of a
+               * blank close(). Without this, every upstream failure
+               * looked identical to the client (a generic 1005 "no
+               * status") no matter what actually went wrong.
+               */
+              try {
+                clientSocket.close(
+                  code || 1011,
+                  reason || "Gemini closed the connection."
+                );
+              } catch (_) {
+                clientSocket.close();
+              }
             }
+          }
+        );
+
+        geminiSocket.on(
+          "unexpected-response",
+          (req, res) => {
+
+            /*
+             * The handshake itself was rejected (e.g. bad model name,
+             * bad API key, region not supported) — this happens
+             * BEFORE a normal open/close cycle, so without this
+             * handler the client would just hang until our own
+             * connect timeout, with no real reason ever surfacing.
+             */
+
+            let body = "";
+            res.on("data", (chunk) => { body += chunk; });
+            res.on("end", () => {
+              console.error(
+                "Gemini Live handshake rejected:",
+                res.statusCode,
+                body
+              );
+
+              try {
+                clientSocket.close(
+                  4502,
+                  `Gemini rejected the connection (HTTP ${res.statusCode}).`
+                );
+              } catch (_) {
+                // socket may already be closed
+              }
+            });
           }
         );
 
@@ -179,4 +227,3 @@ function attachLiveVoiceRelay(server) {
 module.exports = {
   attachLiveVoiceRelay
 };
-      
