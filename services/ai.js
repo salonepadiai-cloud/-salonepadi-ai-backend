@@ -187,6 +187,8 @@ const PROVIDERS = {
 
 async function generateAIResponse({
   userId,
+  userName,
+  userEmail,
   message,
   conversationHistory = [],
   provider
@@ -199,6 +201,28 @@ async function generateAIResponse({
       "Message is required."
     );
   }
+
+
+  /*
+  |--------------------------------------------------------------------------
+  | CURRENT USER IDENTITY (grounded fact, not inferred memory)
+  |--------------------------------------------------------------------------
+  |
+  | This comes straight from the authenticated Supabase session for
+  | THIS request — it is never guessed, never carried over from a
+  | different account, and never confused with the app creator's
+  | name (John Fatorma, which lives in SYSTEM_PROMPT as a separate,
+  | fixed fact).
+  |
+  */
+
+  const currentUserContext = `
+CURRENT USER (verified account data for this exact session — always accurate, never guess beyond this):
+Name: ${userName ? userName : "not provided"}
+Email: ${userEmail ? userEmail : "not provided"}
+
+This is the person you are talking to right now in this conversation.
+`;
 
 
   /*
@@ -277,6 +301,11 @@ No stored memories are currently available.
     {
       role: "system",
       content: SYSTEM_PROMPT
+    },
+
+    {
+      role: "system",
+      content: currentUserContext
     },
 
     {
