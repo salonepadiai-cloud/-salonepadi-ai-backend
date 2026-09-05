@@ -725,6 +725,12 @@ router.post(
             userId:
               req.user.id,
 
+            userName:
+              req.user.user_metadata?.name,
+
+            userEmail:
+              req.user.email,
+
             message:
               message,
 
